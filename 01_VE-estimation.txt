@@ -1,0 +1,368 @@
+rm(list=ls())
+
+library(ggplot2)
+library(ggpubr)
+theme_set(theme_bw())
+
+niter <- 1000 # no. of iterations 
+
+# creating a data frame that will contain the 1000 samples of vaccine effectiveness
+# (VE) estimation. S and B stand for second and third (booster) vaccination, respectively.
+
+SB_para <- as.data.frame(matrix(0, nrow = niter, ncol= 4)) 
+colnames(SB_para) <- c("Sm", "Sgam", "Bm", "Bgam")
+
+prange <- 0:200 # days since second/third dose vaccination
+
+# 1. second dose VE ------------------------------------------------------------
+# 1.1. point estimate
+
+# estimated second dose VE from the published study (Andrews et al., 2022)
+ve.second <- data.frame(ve = c(0.655, 0.487, 0.301, 0.154, 0.115, 0.088),
+                        days=c(median(14:34), median(35:69), 
+                               median(70:63), median(105:139), 
+                               median(140:174), 175))
+
+nll_func_exp <- function(param){
+  lh_df_exp <- rep(0, nrow(ve.second))
+  for (t in 1:nrow(ve.second)){
+    
+    m <- param[1]
+    gam <- param[2]
+    
+    pred_waning <- m*exp(-gam*ve.second$days[t]) 
+    observed <- as.numeric(ve.second$ve[t]) 
+    
+    
+    lh_df_exp[t] <- (pred_waning - observed)^2
+  }
+  return(sum(lh_df_exp))
+}
+
+param0 <- c(0.02, -0.02)
+
+(outcome_fit_exp_second <- optim(param0, fn = nll_func_exp, method = "Nelder-Mead",
+                                 hessian = T, control = list(maxit = 1e4)))
+
+
+#1.2. confidence interval esimtaion --------------------------------------------
+
+# samples and standard deviation from second dose VE from the published study (Andrews et al., 2022)
+samp1_s <- rnorm(niter, 0.655, 0.015/1.96)
+samp2_s <- rnorm(niter, 0.487, 0.015/1.96)
+samp3_s <- rnorm(niter, 0.301, 0.014/1.96)
+samp4_s <- rnorm(niter, 0.154, 0.012/1.96)
+samp5_s <- rnorm(niter, 0.115, 0.014/1.96)
+samp6_s <- rnorm(niter, 0.088, 0.017/1.96)
+
+sd1_s <- 0.015/1.96
+sd2_s <- 0.015/1.96
+sd3_s <- 0.014/1.96
+sd4_s <- 0.012/1.96
+sd5_s <- 0.014/1.96
+sd6_s <- 0.017/1.96
+
+
+for (i in 1:niter){
+  
+  ve.second <- data.frame(days=c(median(14:34), median(35:69), 
+                                 median(70:63), median(105:139), 
+                                 median(140:174), 175),
+                          ve=c(samp1_s[i], samp2_s[i], 
+                               samp3_s[i], samp4_s[i],
+                               samp5_s[i], samp6_s[i]))
+  
+  nll_func_exp <- function(param){
+    lh_df_exp <- rep(0, nrow(ve.second))
+    for (t in 1:nrow(ve.second)){
+      
+      m <- param[1]
+      gam <- param[2]
+      
+      pred_waning <- m*exp(-gam*ve.second$days[t]) 
+      observed <- as.numeric(ve.second$ve[t]) 
+      
+      
+      lh_df_exp[t] <- (pred_waning - observed)^2
+    }
+    return(sum(lh_df_exp))
+  }
+  
+  param0 <- c(0.02, -0.02)
+  
+  (outcome_fit_exp <- optim(param0, fn = nll_func_exp, method = "Nelder-Mead",
+                            #lower = c(0, -Inf), upper = c(1, Inf), 
+                            hessian = T, control = list(maxit = 1e4)))
+  
+  SB_para$Sm[i] <- outcome_fit_exp$par[1]
+  SB_para$Sgam[i] <- outcome_fit_exp$par[2]
+}
+
+
+# confidence interval for the parameter estimates 
+quantile(SB_para$Sm, probs = c(0.025, 0.975))
+quantile(SB_para$Sgam, probs = c(0.025, 0.975))
+
+
+# 1.3. result figure -----------------------------------------------------------
+
+# creating a data frame that will contain 95% CI for the waning curve of
+# second dose VE
+second_samp_decay <- as.data.frame(matrix(0, nrow = length(prange), ncol=niter))
+second_lower <- rep(0, nrow = length(prange))
+second_upper <- rep(0, nrow = length(prange))
+
+for (k in 1:niter){
+  second_samp_decay[,k] <- SB_para$Sm[k]*exp(-SB_para$Sgam[k]*prange)
+}
+
+for (t in 1:length(prange)){
+  second_lower[t] <- quantile(as.numeric(second_samp_decay[t,1:niter]), probs = 0.025)
+  second_upper[t] <- quantile(as.numeric(second_samp_decay[t,1:niter]), probs = 0.975)
+}
+
+
+# estimated point estimate of VE
+second_exp = outcome_fit_exp_second$par[1]*exp(-outcome_fit_exp_second$par[2]*prange)
+
+# creating a data frame for a figure 
+second_waning <- data.frame(days = prange,
+                            ve = second_exp*100,
+                            est = rep(0, length(prange)),
+                            sd = rep(0, length(prange)),
+                            lower = second_lower*100,
+                            upper = second_upper*100)
+
+
+second_waning$est[ve.second$days[1]+1] <- ve.second$ve[1]
+second_waning$est[ve.second$days[2]+1] <- ve.second$ve[2]
+second_waning$est[ve.second$days[3]+1] <- ve.second$ve[3]
+second_waning$est[ve.second$days[4]+1] <- ve.second$ve[4]
+second_waning$est[ve.second$days[5]+1] <- ve.second$ve[5]
+second_waning$est[ve.second$days[6]+1] <- ve.second$ve[6]
+
+second_waning$sd[ve.second$days[1]+1] <- sd1_s
+second_waning$sd[ve.second$days[2]+1] <- sd2_s
+second_waning$sd[ve.second$days[3]+1] <- sd3_s
+second_waning$sd[ve.second$days[4]+1] <- sd4_s
+second_waning$sd[ve.second$days[5]+1] <- sd5_s
+second_waning$sd[ve.second$days[6]+1] <- sd6_s
+
+
+
+# creating a figure that shows that waning second dose VE
+Sdose <- 
+  ggplot(second_waning, aes(x=days)) +
+  
+  geom_line(aes(y=ve), colour = "blue") +
+  
+  geom_point(subset(second_waning, second_waning$est != 0), 
+             mapping = aes(x = days, y = est*100),
+             colour = "blue",
+             size = 0.9) +
+  
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[1,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[2,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[3,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[4,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[5,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(second_waning, second_waning$est != 0)[6,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  
+  geom_ribbon(aes(ymin = lower, ymax = upper, alpha = 0.001),
+              colour = "skyblue",
+              fill = "skyblue") + 
+  
+  ylab("Vaccine effectiveness \n against symptomatic infection (%)") +
+  xlab("Days since the second dose") +
+  scale_y_continuous(expand=c(0,0), breaks=seq(0,100,10), limits = c(0,100)) +
+  scale_x_continuous(expand=c(0,0), breaks=seq(0,300,50)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 15, colour = "black", vjust = 1, hjust = 1),
+        axis.text.y = element_text(size = 15, colour = "black"),
+        axis.title = element_text(size = 15),
+        legend.position = "none") 
+
+
+################################################################################
+# 2. third (booster) dose VE 
+
+# 2.1. point estimate ----------------------------------------------------------
+
+# estimated third dose VE from the published study (Andrews et al., 2022)
+ve.boosted <- data.frame(ve = c(0.669, 0.672, 0.55, 0.457),
+                         days = c(median(1:7), median(8:28), 
+                                  median(29:63), median(64:98)))
+
+nll_func_exp <- function(param){
+  lh_df_exp <- rep(0, nrow(ve.boosted))
+  for (t in 1:nrow(ve.boosted)){
+    
+    m <- param[1]
+    gam <- param[2]
+    
+    pred_waning <- m*exp(-gam*ve.boosted[t,"days"]) 
+    observed <- as.numeric(ve.boosted[t,"ve"]) 
+    
+    
+    lh_df_exp[t] <- (observed - pred_waning)^2
+  }
+  return(sum(lh_df_exp))
+}
+
+param0 <- c(0.02, -0.02)
+
+(outcome_fit_exp <- optim(param0, fn = nll_func_exp, method = "Nelder-Mead",
+                          hessian = T, control = list(maxit = 1e4)))
+
+
+# 2.2. confidence interval estimation ------------------------------------------
+
+# samples and standard deviation from second dose VE from the published study (Andrews et al., 2022)
+samp1_b <- rnorm(niter, 0.669, 0.007/1.96)
+samp2_b <- rnorm(niter, 0.672, 0.006/1.96)
+samp3_b <- rnorm(niter, 0.55, 0.008/1.96)
+samp4_b <- rnorm(niter, 0.457, 0.01/1.96)
+
+sd1_b <- 0.007/1.96
+sd2_b <- 0.006/1.96
+sd3_b <- 0.008/1.96
+sd4_b <- 0.01/1.96
+
+for (i in 1:niter){
+  
+  ve.boosted <- data.frame(days=c(median(1:7), median(8:28), 
+                                  median(29:63), median(64:98)),
+                           ve=c(samp1_b[i], samp2_b[i], samp3_b[i], samp4_b[i]))
+  
+  nll_func_exp <- function(param){
+    lh_df_exp <- rep(0, nrow(ve.boosted))
+    for (t in 1:nrow(ve.boosted)){
+      
+      m <- param[1]
+      gam <- param[2]
+      
+      pred_waning <- m*exp(-gam*ve.boosted$days[t]) 
+      observed <- as.numeric(ve.boosted$ve[t]) 
+      
+      
+      lh_df_exp[t] <- (pred_waning - observed)^2
+    }
+    return(sum(lh_df_exp))
+  }
+  
+  param0 <- c(0.02, -0.02)
+  
+  (outcome_fit_exp <- optim(param0, fn = nll_func_exp, method = "Nelder-Mead",
+                            hessian = T, control = list(maxit = 1e4)))
+  
+  SB_para$Bm[i] <- outcome_fit_exp$par[1]
+  SB_para$Bgam[i] <- outcome_fit_exp$par[2]
+}
+
+# confidence interval for the parameter estimates 
+quantile(SB_para$Bm, probs = c(0.025, 0.975))
+quantile(SB_para$Bgam, probs = c(0.025, 0.975))
+
+
+# 2.3. result figure -----------------------------------------------------------
+
+# creating a data frame that will contain 95% CI for the waning curve of
+# third (booster) dose VE
+booster_samp_decay <- as.data.frame(matrix(0, nrow = length(prange), ncol=niter))
+booster_lower <- rep(0, nrow = length(prange))
+booster_upper <- rep(0, nrow = length(prange))
+
+for (k in 1:niter){
+  booster_samp_decay[,k] <- SB_para$Bm[k]*exp(-SB_para$Bgam[k]*prange)
+}
+
+for (t in 1:length(prange)){
+  booster_lower[t] <- quantile(as.numeric(booster_samp_decay[t,1:niter]), probs = 0.025)
+  booster_upper[t] <- quantile(as.numeric(booster_samp_decay[t,1:niter]), probs = 0.975)
+}
+
+
+# estimated point estimate of VE 
+booster_exp = outcome_fit_exp$par[1]*exp(-outcome_fit_exp$par[2]*prange)
+
+# creating a data frame for a figure 
+booster_waning <- data.frame(days = prange,
+                             ve = booster_exp*100,
+                             est = rep(0, length(prange)),
+                             sd = rep(0, length(prange)),
+                             lower = booster_lower*100,
+                             upper = booster_upper*100)
+
+
+booster_waning$est[ve.boosted$days[1]+1] <- ve.boosted$ve[1]
+booster_waning$est[ve.boosted$days[2]+1] <- ve.boosted$ve[2]
+booster_waning$est[ve.boosted$days[3]+1] <- ve.boosted$ve[3]
+booster_waning$est[ve.boosted$days[4]+1] <- ve.boosted$ve[4]
+
+booster_waning$sd[ve.boosted$days[1]+1] <- sd1_b
+booster_waning$sd[ve.boosted$days[2]+1] <- sd2_b
+booster_waning$sd[ve.boosted$days[3]+1] <- sd3_b
+booster_waning$sd[ve.boosted$days[4]+1] <- sd4_b
+
+
+# creating a figure that shows that waning third (booster) dose VE
+Bdose <- ggplot(booster_waning, aes(x=days)) +
+  
+  geom_line(aes(y=ve), colour = "blue") +
+  
+  geom_point(subset(booster_waning, booster_waning$est != 0), 
+             mapping=aes(x=days, y=est*100),
+             colour = "blue",
+             size = 0.9) +
+  
+  geom_errorbar(subset(booster_waning, booster_waning$est != 0)[1,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(booster_waning, booster_waning$est != 0)[2,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(booster_waning, booster_waning$est != 0)[3,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  geom_errorbar(subset(booster_waning, booster_waning$est != 0)[4,],
+                mapping = aes(ymin=(est-1.96*sd)*100, ymax=(est+1.96*sd)*100, width=.2),
+                colour = "blue") + 
+  
+  geom_ribbon(aes(ymin = lower, ymax = upper, alpha = 0.00000000000001),
+              colour = "skyblue",
+              fill = "skyblue") + 
+  
+  ylab("") +
+  xlab("Days since the third dose") +
+  scale_y_continuous(expand=c(0,0), breaks=seq(0,100,10), limits = c(0,100)) +
+  scale_x_continuous(expand=c(0,0), breaks=seq(0,300,50)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 15, colour = "black", vjust = 1, hjust = 1),
+        axis.text.y = element_text(size = 15, colour = "black"),
+        axis.title = element_text(size = 15),
+        legend.position = "none") 
+
+
+# creating figure 3
+ggarrange(Sdose, Bdose, 
+          vjust =1.5, hjust = -0.1, nrow = 1, ncol = 2)
+
+
+################################################################################
+# 3. save the results 
+# saving the parameter estimates 
+write.csv(SB_para, "SB_para.csv", row.names = FALSE)

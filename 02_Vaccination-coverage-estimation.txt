@@ -1,0 +1,354 @@
+rm(list=ls())
+
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+library(openxlsx)
+theme_set(theme_bw())
+
+# Population size for each age group in Japan
+# according to e-Stat
+# source: https://www.e-stat.go.jp/en
+J_20 <- 12822884 
+J_30 <- 14374823 
+J_40 <- 18425929 
+J_50 <- 16811709 
+J_60 <- 15510948 
+J_70 <- 27669999 
+
+# loading the data on the no. of administered vaccine doses for general population
+# (All) and medical staff (Med)
+All <- read.xlsx("dataset_10Apr2022.xlsx", detectDates = TRUE) %>% as.data.frame
+Med <- read.xlsx("Mdataset_10Apr2022.xlsx", detectDates = TRUE) %>% as.data.frame
+
+
+# 1. calculating administered booster doses for general population and medical staff
+# according to the age groups --------------------------------------------------
+
+Booster <- subset(All, status == 3)
+aggregate(Booster[4:ncol(Booster)], by = list(Booster$date), FUN = sum) -> Booster
+
+Booster$a20 <- rowSums(Booster[,which(colnames(Booster)=="20"):which(colnames(Booster)=="25")])/J_20
+Booster$cum20 <- cumsum(Booster$a20)
+
+Booster$a30 <- rowSums(Booster[,which(colnames(Booster)=="30"):which(colnames(Booster)=="35")])/J_30
+Booster$cum30 <- cumsum(Booster$a30)
+
+Booster$a40 <- rowSums(Booster[,which(colnames(Booster)=="40"):which(colnames(Booster)=="45")])/J_40
+Booster$cum40 <- cumsum(Booster$a40)
+
+Booster$a50 <- rowSums(Booster[,which(colnames(Booster)=="50"):which(colnames(Booster)=="55")])/J_50
+Booster$cum50 <- cumsum(Booster$a50)
+
+Booster$a60 <- rowSums(Booster[,which(colnames(Booster)=="60"):which(colnames(Booster)=="65")])/J_60
+Booster$cum60 <- cumsum(Booster$a60)
+
+Booster$a70 <- rowSums(Booster[,which(colnames(Booster)=="70"):which(colnames(Booster)=="100+")])/J_70
+Booster$cum70 <- cumsum(Booster$a70)
+
+
+Med <- subset(Med, status == 3)
+aggregate(Med[4:ncol(Med)], by = list(Med$date), FUN = sum) -> Med
+
+
+Med$a20 <- rowSums(Med[,which(colnames(Med)=="20"):which(colnames(Med)=="25")])/J_20
+Med$cum20 <- cumsum(Med$a20)
+
+Med$a30 <- rowSums(Med[,which(colnames(Med)=="30"):which(colnames(Med)=="35")])/J_30
+Med$cum30 <- cumsum(Med$a30)
+
+Med$a40 <- rowSums(Med[,which(colnames(Med)=="40"):which(colnames(Med)=="45")])/J_40
+Med$cum40 <- cumsum(Med$a40)
+
+Med$a50 <- rowSums(Med[,which(colnames(Med)=="50"):which(colnames(Med)=="55")])/J_50
+Med$cum50 <- cumsum(Med$a50)
+
+Med$a60 <- rowSums(Med[,which(colnames(Med)=="60"):which(colnames(Med)=="65")])/J_60
+Med$cum60 <- cumsum(Med$a60)
+
+Med$a70 <- rowSums(Med[,which(colnames(Med)=="70"):which(colnames(Med)=="100+")])/J_70
+Med$cum70 <- cumsum(Med$a70)
+
+
+Booster20 <- Booster$cum20 + Med$cum20
+Booster30 <- Booster$cum30 + Med$cum30
+Booster40 <- Booster$cum40 + Med$cum40
+Booster50 <- Booster$cum50 + Med$cum50
+Booster60 <- Booster$cum60 + Med$cum60
+Booster70 <- Booster$cum70 + Med$cum70
+
+
+# 2. estimating the booster vaccination coverage for 20s, 30s, and 40s
+# based on the second dose vaccine coverage ------------------------------------
+
+
+# the maximum second dose vaccine coverage among 20s, 30s, and 40s, 
+# according to the Japanese government 
+# source: https://www.kantei.go.jp/jp/headline/kansensho/vaccine.html 
+fin_sec20 <- 0.799901775168884
+fin_sec30 <- 0.799181991142238
+fin_sec40 <- 0.829838459878044
+
+# use the logistic model, borrowing some parameters from the previous estimation
+
+
+logistic.booster <- function(Booster_age,fin_second){
+  
+  
+  nll_func <- function(param){
+    
+    lh_df <- rep(0, length(Booster_age))
+    for (t in 1:length(Booster_age)){
+      
+      phi1 <- fin_second
+      phi2 <- param[1]
+      phi3 <- param[2]
+
+      vac <- phi1/(1+exp(phi3*(t-phi2)))
+      
+      observed_data <- Booster_age[t]
+      
+      lh_df[t] <- (observed_data-vac)^2 
+    }
+    return(sum(lh_df))
+    
+  }
+  param0 <- c(100, -0.07)
+  
+  (outcome <- optim(param0, fn = nll_func, method = "BFGS", hessian = T,  
+                    control = list(maxit = 1e4)))
+  
+  
+  x <- 1:(length(Booster_age))
+  fit <- fin_second/(1+exp(outcome$par[2]*(x-outcome$par[1])))
+  
+  date <- seq(from=as.Date("2021/12/1"), to = as.Date("2021/12/1")+length(x)-1, by ="day")
+  
+  
+  plot(date, fit, type="l",
+       ylim = c(0,1), ylab="")
+  
+  points(date, Booster_age, 
+         ylim = c(0,1))
+  
+  outcome$par[c(1,2)] -> outcome$par[c(2,3)]
+  outcome$par[1] <- fin_second
+  outcome
+  
+}
+
+
+fit20 <- logistic.booster(Booster20, fin_sec20)
+fit30 <- logistic.booster(Booster30, fin_sec30)
+fit40 <- logistic.booster(Booster40, fin_sec40)
+
+
+
+# 3. estimating the booster vaccination coverage for 50s, 60s, and >70s
+# based on the administered third (booster) vaccine doses ----------------------
+
+logistic.booster.notfix <- function(Booster_age){
+  
+  nll_func <- function(param){
+    
+    lh_df <- rep(0, length(Booster_age))
+    for (t in 1:length(Booster_age)){
+      
+      phi1 <- param[1]
+      phi2 <- param[2]
+      phi3 <- param[3]
+      
+      #vac <- SSlogis(t, phi1, phi2, phi3)
+      vac <- phi1/(1+exp(phi3*(t-phi2)))
+      
+      observed_data <- Booster_age[t]
+      
+      lh_df[t] <- (observed_data-vac)^2 
+    }
+    return(sum(lh_df))
+    
+  }
+  param0 <- c(0.8, 100, -0.07)
+  
+  (outcome <- optim(param0, fn = nll_func, method = "BFGS", hessian = T,  
+                    control = list(maxit = 1e4)))
+  
+  
+  x <- 1:(length(Booster_age))
+  fit <- outcome$par[1]/(1+exp(outcome$par[3]*(x-outcome$par[2])))
+  
+  date <- seq(from=as.Date("2021/12/1"), to = as.Date("2021/12/1")+length(x)-1, by ="day")
+  
+  
+  plot(date, fit, type="l",
+       ylim = c(0,1), ylab="")
+  
+  points(date, Booster_age, 
+         ylim = c(0,1))
+  
+  
+  outcome
+  
+}
+
+fit50 <- logistic.booster.notfix(Booster50)
+fit60 <- logistic.booster.notfix(Booster60)
+fit70 <- logistic.booster.notfix(Booster70)
+
+
+# 2. model estimates for the third (booster) vaccine doses for each age group --
+
+VacStart <- as.Date("2021/2/17") # when the vaccination programme started 
+Bstart <- as.Date("2021/12/1") # when the booster vaccination programme started
+latest <- as.Date("2022/4/10") # the end of the vaccination data-set
+ext <- as.Date("2022/8/1") # the end of prediction performed 
+
+
+x <- 1:((length(Booster20)) +(ext - latest))
+leng <- length(Booster20) +(ext - latest)
+
+add_df <- data.frame(date = seq(from = VacStart, to = Bstart-1, by = "day"),
+                     cum = rep(0, Bstart-VacStart))
+
+
+
+# 20
+BoosterCum_20 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit20$par[1]/(1+exp(fit20$par[3]*(x-fit20$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_20) -> BoosterCum_20
+
+# 30
+BoosterCum_30 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit30$par[1]/(1+exp(fit30$par[3]*(x-fit30$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_30) -> BoosterCum_30
+
+# 40
+BoosterCum_40 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit40$par[1]/(1+exp(fit40$par[3]*(x-fit40$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_40) -> BoosterCum_40
+
+# 50
+BoosterCum_50 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit50$par[1]/(1+exp(fit50$par[3]*(x-fit50$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_50) -> BoosterCum_50
+
+# 60
+BoosterCum_60 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit60$par[1]/(1+exp(fit60$par[3]*(x-fit60$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_60) -> BoosterCum_60
+
+# 70
+BoosterCum_70 <- data.frame(date=seq(from=Bstart, 
+                                     to = Bstart+leng-1,
+                                     by="day"),
+                            cum=fit70$par[1]/(1+exp(fit70$par[3]*(x-fit70$par[2]))))
+
+# vaccination coverage (cumulative)
+rbind(add_df,BoosterCum_70) -> BoosterCum_70
+
+# save the results 
+
+write.csv(BoosterCum_20, "BoosterCum_20.csv")
+write.csv(BoosterCum_30, "BoosterCum_30.csv")
+write.csv(BoosterCum_40, "BoosterCum_40.csv")
+write.csv(BoosterCum_50, "BoosterCum_50.csv")
+write.csv(BoosterCum_60, "BoosterCum_60.csv")
+write.csv(BoosterCum_70, "BoosterCum_70.csv")
+
+# 3. creating Figure 2 ---------------------------------------------------------
+
+cov20 <- BoosterCum_20[which(BoosterCum_20$date >= Bstart),]
+cov30 <- BoosterCum_30[which(BoosterCum_30$date >= Bstart),]
+cov40 <- BoosterCum_40[which(BoosterCum_40$date >= Bstart),]
+cov50 <- BoosterCum_50[which(BoosterCum_50$date >= Bstart),]
+cov60 <- BoosterCum_60[which(BoosterCum_60$date >= Bstart),]
+cov70 <- BoosterCum_70[which(BoosterCum_70$date >= Bstart),]
+
+cov20$data <- rep(NA, nrow(cov20))
+cov30$data <- rep(NA, nrow(cov30))
+cov40$data <- rep(NA, nrow(cov40))
+cov50$data <- rep(NA, nrow(cov40))
+cov60$data <- rep(NA, nrow(cov50))
+cov70$data <- rep(NA, nrow(cov60))
+
+
+for (t in 1:nrow(cov20)){
+
+if (t <= length(Booster20)){
+  cov20$data[t] <- Booster20[t]
+  cov30$data[t] <- Booster30[t]
+  cov40$data[t] <- Booster40[t]
+  cov50$data[t] <- Booster50[t]
+  cov60$data[t] <- Booster60[t]
+  cov70$data[t] <- Booster70[t]
+
+}
+}
+
+
+covfig <- function(cov_age, age){
+
+  ggplot(cov_age, aes(x=date), size =2) +
+    geom_line(aes(y=cum*100), colour = "deepskyblue3", size = 1, linetype="twodash") +
+    geom_line(aes(y=data*100), colour = "blue", size = 1) +
+    xlab("") +
+    ylab("") +
+    theme(text = element_text(size=20)) +
+    scale_x_date(breaks = "1 month", expand=c(0,0))  +
+    scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          axis.text.x = element_text(size = 18, angle = 50, colour = "black", vjust = 1, hjust = 1),
+          legend.position = c(0.1,0.8),
+          legend.text=element_text(size=20),
+          legend.title=element_text(size=20)) +
+    ggtitle(paste0(age))
+
+}
+
+(covfig20 <- covfig(cov20, "20-29 years"))
+(covfig30 <- covfig(cov30, "30-39 years"))
+(covfig40 <- covfig(cov40, "40-49 years"))
+(covfig50 <- covfig(cov50, "50-59 years"))
+(covfig60 <- covfig(cov60, "60-69 years"))
+(covfig70 <- covfig(cov70, "70 years and above"))
+
+
+
+covfig2040 <- ggarrange(covfig20, covfig30, covfig40,
+          vjust = 1.5, hjust = -0.1, nrow= 1, ncol = 3,
+          labels = c("A", "B", "C"),
+          font.label = list(size=18))
+
+
+covfig5070 <- ggarrange(covfig50, covfig60, covfig70,
+                        vjust = 1.5, hjust = -0.1, nrow= 1, ncol = 3,
+                        labels = c("D", "E", "F"),
+                        font.label = list(size=18))
+
+upperfig <- annotate_figure(covfig2040, left =text_grob("Third dose vaccination coverage (%)", size =22, rot=90),
+                bottom=text_grob("Date", size = 22))
+
+lowerfig <- annotate_figure(covfig5070, left =text_grob("Third dose vaccination coverage (%)", size =22, rot=90),
+                            bottom=text_grob("Date", size = 22))
+ggarrange(upperfig, lowerfig,
+          vjust =1.5, hjust = -0.1, nrow = 2, ncol = 1)

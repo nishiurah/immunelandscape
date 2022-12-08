@@ -1,0 +1,95 @@
+rm(list=ls())
+
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(exactRankTests)
+
+
+
+# Fitting a linear regression model using data on risk of 
+# SARS-CoV-2 (per 100,000) infection from Feb 7 to Apr 10, 2022 
+
+inf_df <- read.csv("validation_pref_inf.csv") 
+
+inf_df$date <- as.Date(inf_df$date, format = "%d/%m/%Y")
+
+inf_df <- inf_df[-nrow(inf_df),]
+
+
+trend_df <- data.frame(npref = 1:47, # prefecture number 
+                       coef = rep(NA,47), # estimated coefficients
+                       p_sig = rep(NA,47), # p-value 
+                       trend = rep(NA,47)) # increasing/decreasing trend of incidence
+
+
+for (i in 1:47){
+  
+  reg_df <- inf_df[, c(1,1+i)]
+  colnames(reg_df) <- c("date", "inf")
+  reg <- lm(inf ~ date, data = reg_df) 
+  trend_df$coef[i] <- coef(reg)[2]
+
+  f <- summary(reg)$fstatistic
+  p <- pf(f[1],f[2],f[3],lower.tail=F)
+  attributes(p) <- NULL
+  
+  trend_df$p_sig[i] <- p<0.05
+  
+  
+  if (trend_df$coef[i] >=0){
+    trend_df$trend[i] <- 1
+  } else {
+    
+    trend_df$trend[i] <- 0
+  }
+  
+}
+
+
+# Loading data on the estimated prefecture-specific proportion immune (the method 
+# used for this computation is overall the same with the main analysis, 
+# but the detailed description is provided in the manuscript
+imm_df <- read.csv("Pref_ImmuneProp_12Apr2022.csv") 
+imm_df$date <- as.Date(imm_df$date, format = "%Y-%m-%d")
+imm_df <- imm_df %>% dplyr::filter(date=="2022-04-10") 
+
+
+imm_trend_df <- left_join(trend_df, imm_df, by="npref") %>% 
+  dplyr::filter(p_sig == TRUE) %>% 
+  dplyr::select(npref, trend, both) %>% 
+  mutate(trend=case_when(trend=="1"~"Increase", trend=="0"~"Decrease"))
+
+imm_trend_df$trend <- ordered(imm_trend_df$trend,
+                             levels = c("Decrease", "Increase"))
+
+
+# Creating Figure 6
+imm_trend_df %>% ggplot(aes(x = trend, y = both*100, fill = trend, color = trend)) +
+  geom_boxplot(aes(x = trend, y = both*100),alpha=0.5) +
+  
+  scale_y_continuous("Prefecture-specific immune proportion (%)", expand = c(0,0)) +
+  scale_fill_discrete("") +
+  scale_color_discrete("") +
+  
+  coord_cartesian(ylim = c(0,100)) +
+  theme_bw()+
+  theme(axis.text.x = element_text(size = 25),
+        axis.text.y = element_text(size = 25),
+        axis.title.x = element_text(size = 25),
+        axis.title.y = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black"),) +
+  
+  geom_jitter(aes(color = trend,size=1.5))  +
+  theme(axis.title.x = element_blank(), legend.position = "none") +
+  labs(title = "") 
+
+
+# Conducting the Wilcoxon signed-rank test
+imm_trend_df %>% filter(trend == "Decrease") -> data1
+imm_trend_df %>% filter(trend == "Increase") -> data2
+wilcox.exact(data1$both, data2$both,
+             paired = F, conf.int = T,conf.level=0.95) 
+

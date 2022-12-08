@@ -1,0 +1,595 @@
+rm(list=ls())
+
+library(ggpubr)
+library(ggplot2)
+library(tidyr)
+
+theme_set(theme_bw())
+
+# Population size for each age group in Japan according to e-Stat
+# source: https://www.e-stat.go.jp/en
+J_20 <- 12822884 
+J_30 <- 14374823 
+J_40 <- 18425929 
+J_50 <- 16811709 
+J_60 <- 15510948 
+J_70 <- 27669999 
+
+niter <- 1000 # no. of iteration
+
+
+VacStart <- as.Date("2021/2/17") # when the vaccination programme started 
+Bstart <- as.Date("2021/12/1") # when the booster vaccination programme started
+latest <- as.Date("2022/4/10") # the end of the vaccination data-set
+ext <- as.Date("2022/8/1") # the end of prediction performed 
+
+# loading the data on the no. of the second dose vaccination according to the age groups
+# and previously created data-set on the no. of the third (booster) vaccine doses
+vac_second <- read.csv("seconddose_age.csv") %>% as.data.frame
+BoosterCum_20 <- read.csv("BoosterCum_20.csv")
+BoosterCum_30 <- read.csv("BoosterCum_30.csv")
+BoosterCum_40 <- read.csv("BoosterCum_40.csv")
+BoosterCum_50 <- read.csv("BoosterCum_50.csv")
+BoosterCum_60 <- read.csv("BoosterCum_60.csv")
+BoosterCum_70 <- read.csv("BoosterCum_70.csv")
+
+# 1. calculating the no. of people immune due to the third (booster) vaccination
+# while taking waning VE into account ------------------------------------------
+
+
+second_20 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+second_30 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+second_40 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+second_50 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+second_60 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+second_70 <- as.data.frame(matrix(0,nrow = nrow(vac_second), ncol= nrow(vac_second)))
+
+second_20_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+second_30_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+second_40_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+second_50_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+second_60_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+second_70_imm <- as.data.frame(matrix(0, nrow(vac_second), ncol=1))
+
+second_20_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+second_30_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+second_40_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+second_50_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+second_60_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+second_70_samp <- as.data.frame(matrix(0, nrow(vac_second), ncol=niter))
+
+
+
+for ( k in 1:niter){
+  
+  for (i in 1:nrow(vac_second)) {
+    for (t in i:nrow(vac_second)) {
+      second_20[t, i] <- vac_second[i,3]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      second_30[t, i] <- vac_second[i,4]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      second_40[t, i] <- vac_second[i,5]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      second_50[t, i] <- vac_second[i,6]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      second_60[t, i] <- vac_second[i,7]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      second_70[t, i] <- vac_second[i,8]*(SB_para$Sm[k]*exp(-SB_para$Sgam[k]*(t-i)))
+      
+    }
+  }
+  for (t in 1:nrow(vac_second)) {
+    
+    second_20_imm[t,1] <- sum(second_20[t,1:ncol(second_20)])
+    second_30_imm[t,1] <- sum(second_30[t,1:ncol(second_30)])
+    second_40_imm[t,1] <- sum(second_40[t,1:ncol(second_40)])
+    second_50_imm[t,1] <- sum(second_50[t,1:ncol(second_50)])
+    second_60_imm[t,1] <- sum(second_60[t,1:ncol(second_60)])
+    second_70_imm[t,1] <- sum(second_70[t,1:ncol(second_70)])
+  }
+  
+  second_20_samp[,k] <- second_20_imm
+  second_30_samp[,k] <- second_30_imm
+  second_40_samp[,k] <- second_40_imm
+  second_50_samp[,k] <- second_50_imm
+  second_60_samp[,k] <- second_60_imm
+  second_70_samp[,k] <- second_70_imm
+}
+
+
+
+# 2. calculating the estimated no. of booster vaccine doses according to age groups
+# 20s 
+GM_BoosterDaily20<- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily20) <- c("date", "Bprop")
+GM_BoosterDaily20$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily20$Bprop[1] <- BoosterCum_20$cum[which(BoosterCum_20$date == Bstart)]
+start<- which(BoosterCum_20$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily20)){
+  GM_BoosterDaily20$Bprop[t] <- BoosterCum_20$cum[start+t-1] - BoosterCum_20$cum[start+t-2]
+}
+
+# 30s 
+GM_BoosterDaily30<- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily30) <- c("date", "Bprop")
+GM_BoosterDaily30$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily30$Bprop[1] <- BoosterCum_30$cum[which(BoosterCum_30$date == Bstart)]
+start<- which(BoosterCum_30$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily30)){
+  GM_BoosterDaily30$Bprop[t] <- BoosterCum_30$cum[start+t-1] - BoosterCum_30$cum[start+t-2]
+}
+
+# 40s
+GM_BoosterDaily40<- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily40) <- c("date", "Bprop")
+GM_BoosterDaily40$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily40$Bprop[1] <- BoosterCum_40$cum[which(BoosterCum_40$date == Bstart)]
+start<- which(BoosterCum_40$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily40)){
+  GM_BoosterDaily40$Bprop[t] <- BoosterCum_40$cum[start+t-1] - BoosterCum_40$cum[start+t-2]
+}
+
+# 50s
+GM_BoosterDaily50<- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily50) <- c("date", "Bprop")
+GM_BoosterDaily50$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily50$Bprop[1] <- BoosterCum_50$cum[which(BoosterCum_50$date ==Bstart)]
+start<- which(BoosterCum_50$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily50)){
+  GM_BoosterDaily50$Bprop[t] <- BoosterCum_50$cum[start+t-1] - BoosterCum_50$cum[start+t-2]
+}
+
+# 60s
+GM_BoosterDaily60 <- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily60) <- c("date", "Bprop")
+GM_BoosterDaily60$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily60$Bprop[1] <- BoosterCum_60$cum[which(BoosterCum_60$date == Bstart)]
+start<- which(BoosterCum_60$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily60)){
+  GM_BoosterDaily60$Bprop[t] <- BoosterCum_60$cum[start+t-1] - BoosterCum_60$cum[start+t-2]
+}
+
+# 70s
+GM_BoosterDaily70 <- as.data.frame(matrix(0, nrow=(ext-Bstart+1),ncol=2)) 
+
+colnames(GM_BoosterDaily70) <- c("date", "Bprop")
+GM_BoosterDaily70$date <- seq(from = Bstart, to = ext, by="day") 
+
+GM_BoosterDaily70$Bprop[1] <- BoosterCum_70$cum[which(BoosterCum_70$date == Bstart)]
+start<- which(BoosterCum_70$date == Bstart)
+
+for(t in 1: nrow(GM_BoosterDaily70)){
+  GM_BoosterDaily70$Bprop[t] <- BoosterCum_70$cum[start+t-1] - BoosterCum_70$cum[start+t-2]
+}
+
+
+# 3. calculating the no. of people immune due to the third (booster) vaccination
+# while taking waning VE into account ------------------------------------------
+
+booster_imm_a20 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily20), ncol=niter))
+booster_imm_a30 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily30), ncol=niter))
+booster_imm_a40 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily40), ncol=niter))
+booster_imm_a50 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily50), ncol=niter))
+booster_imm_a60 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily60), ncol=niter))
+booster_imm_a70 <- as.data.frame(matrix(0, nrow= nrow(GM_BoosterDaily70), ncol=niter))
+
+
+for (k in 1:niter) {
+
+  boost_func <- function(GM_BoosterDaily){
+
+    booster_exp <- as.data.frame(matrix(0,nrow = nrow(GM_BoosterDaily), ncol= nrow(GM_BoosterDaily)))
+    booster_exp_imm <- vector()
+    for (i in 1:nrow(GM_BoosterDaily)) {
+      for (t in i:nrow(GM_BoosterDaily)) {
+        booster_exp[t, i] <- GM_BoosterDaily[i,2]*(SB_para$Bm[k]*exp(-SB_para$Bgam[k]*(t-i)))
+      }
+    }
+    for (t in 1:nrow(GM_BoosterDaily)) {
+      booster_exp_imm[t] <- sum(booster_exp[t,1:ncol(booster_exp)])
+    }
+    booster_exp_imm
+  }
+
+  boost_func(GM_BoosterDaily20) -> booster_imm_a20[,k]
+  boost_func(GM_BoosterDaily30) -> booster_imm_a30[,k]
+  boost_func(GM_BoosterDaily40) -> booster_imm_a40[,k]
+  boost_func(GM_BoosterDaily50) -> booster_imm_a50[,k]
+  boost_func(GM_BoosterDaily60) -> booster_imm_a60[,k]
+  boost_func(GM_BoosterDaily70) -> booster_imm_a70[,k]
+
+}
+
+
+# 4. summing the immune population due to the second and third (booster) vaccine
+
+sum_point <- as.numeric(Bstart-VacStart)+1
+
+
+sb20 <- rbind(second_20_samp[1:(sum_point-1),],
+              (second_20_samp[sum_point:nrow(second_20_samp),] + booster_imm_a20))
+sb30 <- rbind(second_30_samp[1:(sum_point-1),],
+              (second_30_samp[sum_point:nrow(second_30_samp),] + booster_imm_a30))
+sb40 <- rbind(second_40_samp[1:(sum_point-1),],
+              (second_40_samp[sum_point:nrow(second_40_samp),] + booster_imm_a40))
+sb50 <- rbind(second_50_samp[1:(sum_point-1),],
+              (second_50_samp[sum_point:nrow(second_50_samp),] + booster_imm_a50))
+sb60 <- rbind(second_60_samp[1:(sum_point-1),],
+              (second_60_samp[sum_point:nrow(second_60_samp),] + booster_imm_a60))
+sb70 <- rbind(second_70_samp[1:(sum_point-1),],
+              (second_70_samp[sum_point:nrow(second_70_samp),] + booster_imm_a70))
+
+# creating data frames that will contain 95% confidence interval for the estimated
+# immune population 
+vac_ci_20 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+vac_ci_30 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+vac_ci_40 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+vac_ci_50 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+vac_ci_60 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+vac_ci_70 <- as.data.frame(matrix(0, nrow=nrow(sb20), ncol=3))
+
+
+for (t in 1:nrow(sb20)){
+  
+  vac_ci_20[t,] <- quantile(as.matrix(sb20[t,1:niter]), c(0.025, 0.5, 0.975))
+  vac_ci_30[t,] <- quantile(as.matrix(sb30[t,1:niter]), c(0.025, 0.5, 0.975))
+  vac_ci_40[t,] <- quantile(as.matrix(sb40[t,1:niter]), c(0.025, 0.5, 0.975))
+  vac_ci_50[t,] <- quantile(as.matrix(sb50[t,1:niter]), c(0.025, 0.5, 0.975))
+  vac_ci_60[t,] <- quantile(as.matrix(sb60[t,1:niter]), c(0.025, 0.5, 0.975))
+  vac_ci_70[t,] <- quantile(as.matrix(sb70[t,1:niter]), c(0.025, 0.5, 0.975))
+  
+}
+
+
+# 5. getting the no. of infected population after the vaccination programme started 
+natural <- read.xlsx("MHLW_DeathCase_202204011.xlsx", sheet ="Case", detectDates = TRUE)
+
+natural_20 <- subset(natural, natural$AgeSex=="D20" & natural$pref ==0 & natural$Date>=VacStart )
+natural_30 <- subset(natural, natural$AgeSex=="D30" & natural$pref ==0 & natural$Date>=VacStart )
+natural_40 <- subset(natural, natural$AgeSex=="D40" & natural$pref ==0 & natural$Date>=VacStart )
+natural_50 <- subset(natural, natural$AgeSex=="D50" & natural$pref ==0 & natural$Date>=VacStart )
+natural_60 <- subset(natural, natural$AgeSex=="D60" & natural$pref ==0 & natural$Date>=VacStart )
+natural_70 <- subset(natural, natural$AgeSex=="D70" & natural$pref ==0 & natural$Date>=VacStart )
+natural_80 <- subset(natural, natural$AgeSex=="D80ov" & natural$pref ==0 & natural$Date>=VacStart )
+
+
+natural_latest <- natural$Date[nrow(natural)]
+
+add <- rep(0, nrow(second_20_samp) - nrow(natural_70))
+
+natural_20 <- c(as.vector(natural_20$Estcase*4)/J_20, add)
+natural_30 <- c(as.vector(natural_30$Estcase*4)/J_30, add)
+natural_40 <- c(as.vector(natural_40$Estcase*4)/J_40, add)
+natural_50 <- c(as.vector(natural_50$Estcase*4)/J_50, add)  
+natural_60 <- c(as.vector(natural_60$Estcase*4)/J_60, add)
+natural_70 <- c(as.vector((natural_70$Estcase+natural_80$Estcase)*4)/J_70, add)
+
+
+# 6. estimating the population immune due to natural infection -----------------
+
+boost_inf_func <- function(natual_age){
+  
+  inf_exp <- as.data.frame(matrix(0,nrow = length(natual_age), ncol= length(natual_age)))
+  inf_exp_imm <- vector()
+  
+  for (i in 1:length(natual_age)) {
+    for (t in i:length(natual_age)) {
+      inf_exp[t, i] <- natual_age[i]*exp(-outcome_fit_exp$par[2]*(t-i))
+    }
+  }
+  
+  for (t in 1:length(natual_age)) {
+    inf_exp_imm[t] <- sum(inf_exp[t,1:ncol(inf_exp)])
+  }
+  inf_exp_imm
+  
+}
+
+boost_inf_func(natural_20) -> natinf_waning_a20
+boost_inf_func(natural_30) -> natinf_waning_a30
+boost_inf_func(natural_40) -> natinf_waning_a40
+boost_inf_func(natural_50) -> natinf_waning_a50
+boost_inf_func(natural_60) -> natinf_waning_a60
+boost_inf_func(natural_70) -> natinf_waning_a70
+
+natinf_waning_a20_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a20), ncol=niter))
+natinf_waning_a30_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a30), ncol=niter))
+natinf_waning_a40_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a40), ncol=niter))
+natinf_waning_a50_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a50), ncol=niter))
+natinf_waning_a60_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a60), ncol=niter))
+natinf_waning_a70_df <- as.data.frame(matrix(0, nrow=length(natinf_waning_a70), ncol=niter))
+
+
+for (k in 1:niter) {
+  natinf_waning_a20_df[,k] <- natinf_waning_a20
+  natinf_waning_a30_df[,k] <- natinf_waning_a30
+  natinf_waning_a40_df[,k] <- natinf_waning_a40
+  natinf_waning_a50_df[,k] <- natinf_waning_a50
+  natinf_waning_a60_df[,k] <- natinf_waning_a60
+  natinf_waning_a70_df[,k] <- natinf_waning_a70
+}
+
+
+all_samp_20 <- sb20 + natinf_waning_a20_df
+all_samp_30 <- sb30 + natinf_waning_a30_df
+all_samp_40 <- sb40 + natinf_waning_a40_df
+all_samp_50 <- sb50 + natinf_waning_a50_df
+all_samp_60 <- sb60 + natinf_waning_a60_df
+all_samp_70 <- sb70 + natinf_waning_a70_df
+
+ci_20 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a20), ncol=3))
+ci_30 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a30), ncol=3))
+ci_40 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a40), ncol=3))
+ci_50 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a50), ncol=3))
+ci_60 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a60), ncol=3))
+ci_70 <- as.data.frame(matrix(0, nrow=nrow(booster_imm_a70), ncol=3))
+
+
+
+for (t in 1:nrow(sb20)){
+  
+  ci_20[t,] <- quantile(as.matrix(all_samp_20[t,1:niter]), c(0.025, 0.5, 0.975))
+  ci_30[t,] <- quantile(as.matrix(all_samp_30[t,1:niter]), c(0.025, 0.5, 0.975))
+  ci_40[t,] <- quantile(as.matrix(all_samp_40[t,1:niter]), c(0.025, 0.5, 0.975))
+  ci_50[t,] <- quantile(as.matrix(all_samp_50[t,1:niter]), c(0.025, 0.5, 0.975))
+  ci_60[t,] <- quantile(as.matrix(all_samp_60[t,1:niter]), c(0.025, 0.5, 0.975))
+  ci_70[t,] <- quantile(as.matrix(all_samp_70[t,1:niter]), c(0.025, 0.5, 0.975))
+  
+}
+
+# age-specific susceptible proportion (due to infection + vaccination and vaccination only)
+date <- format(as.Date(vac_second$date, origin="1970-01-01")) 
+date <- as.Date(vac_second$date)
+
+vac_sus <- 1 - cbind(vac_ci_20[,2], vac_ci_30[,2], vac_ci_40[,2], vac_ci_50[,2], 
+                 vac_ci_60[,2], vac_ci_70[,2])
+
+inf_sus <- 1 - cbind(ci_20[,2],ci_30[,2], ci_40[,2], ci_50[,2], ci_60[,2], ci_70[,2])
+
+valid_df <- cbind(rep(date,2), rbind(vac_sus, inf_sus), 
+                  c(rep("vac", nrow(vac_ci_20)), rep("infvac", nrow(vac_ci_20)))) %>% as.data.frame()
+colnames(valid_df) <- c("date", "a20", "a30", "a40", "a50", "a60", "a70", "type")
+
+# write.csv(valid_df, "sus_omic_6Sep2022.csv")
+
+# 7. creating Figure 4
+
+fig_20 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_20))),
+                                   as.matrix(rep("vac_est", nrow(ci_20))),
+                                   as.matrix(rep("vac_upper", nrow(ci_20))),
+                                   as.matrix(rep("inf_lower", nrow(ci_20))),
+                                   as.matrix(rep("inf_est", nrow(ci_20))),
+                                   as.matrix(rep("inf_upper", nrow(ci_20)))),
+                        prop=rbind(as.matrix(vac_ci_20[,1]*100),
+                                   as.matrix(vac_ci_20[,2]*100),
+                                   as.matrix(vac_ci_20[,3]*100),
+                                   as.matrix(ci_20[,1]*100),
+                                   as.matrix(ci_20[,2]*100),
+                                   as.matrix(ci_20[,3]*100)))
+
+
+fig_30 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_30))),
+                                   as.matrix(rep("vac_est", nrow(ci_30))),
+                                   as.matrix(rep("vac_upper", nrow(ci_30))),
+                                   as.matrix(rep("inf_lower", nrow(ci_30))),
+                                   as.matrix(rep("inf_est", nrow(ci_30))),
+                                   as.matrix(rep("inf_upper", nrow(ci_30)))),
+                        prop=rbind(as.matrix(vac_ci_30[,1]*100),
+                                   as.matrix(vac_ci_30[,2]*100),
+                                   as.matrix(vac_ci_30[,3]*100),
+                                   as.matrix(ci_30[,1]*100),
+                                   as.matrix(ci_30[,2]*100),
+                                   as.matrix(ci_30[,3]*100)))
+
+fig_40 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_40))),
+                                   as.matrix(rep("vac_est", nrow(ci_40))),
+                                   as.matrix(rep("vac_upper", nrow(ci_40))),
+                                   as.matrix(rep("inf_lower", nrow(ci_40))),
+                                   as.matrix(rep("inf_est", nrow(ci_40))),
+                                   as.matrix(rep("inf_upper", nrow(ci_40)))),
+                        prop=rbind(as.matrix(vac_ci_40[,1]*100),
+                                   as.matrix(vac_ci_40[,2]*100),
+                                   as.matrix(vac_ci_40[,3]*100),
+                                   as.matrix(ci_40[,1]*100),
+                                   as.matrix(ci_40[,2]*100),
+                                   as.matrix(ci_40[,3]*100)))
+
+fig_50 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_50))),
+                                   as.matrix(rep("vac_est", nrow(ci_50))),
+                                   as.matrix(rep("vac_upper", nrow(ci_50))),
+                                   as.matrix(rep("inf_lower", nrow(ci_50))),
+                                   as.matrix(rep("inf_est", nrow(ci_50))),
+                                   as.matrix(rep("inf_upper", nrow(ci_50)))),
+                        prop=rbind(as.matrix(vac_ci_50[,1]*100),
+                                   as.matrix(vac_ci_50[,2]*100),
+                                   as.matrix(vac_ci_50[,3]*100),
+                                   as.matrix(ci_50[,1]*100),
+                                   as.matrix(ci_50[,2]*100),
+                                   as.matrix(ci_50[,3]*100)))
+
+fig_60 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_60))),
+                                   as.matrix(rep("vac_est", nrow(ci_60))),
+                                   as.matrix(rep("vac_upper", nrow(ci_60))),
+                                   as.matrix(rep("inf_lower", nrow(ci_60))),
+                                   as.matrix(rep("inf_est", nrow(ci_60))),
+                                   as.matrix(rep("inf_upper", nrow(ci_60)))),
+                        prop=rbind(as.matrix(vac_ci_60[,1]*100),
+                                   as.matrix(vac_ci_60[,2]*100),
+                                   as.matrix(vac_ci_60[,3]*100),
+                                   as.matrix(ci_60[,1]*100),
+                                   as.matrix(ci_60[,2]*100),
+                                   as.matrix(ci_60[,3]*100)))
+
+
+fig_70 <- data.frame(date=rep(as.Date(vac_second$date),6),
+                        type=rbind(as.matrix(rep("vac_lower", nrow(ci_70))),
+                                   as.matrix(rep("vac_est", nrow(ci_70))),
+                                   as.matrix(rep("vac_upper", nrow(ci_70))),
+                                   as.matrix(rep("inf_lower", nrow(ci_70))),
+                                   as.matrix(rep("inf_est", nrow(ci_70))),
+                                   as.matrix(rep("inf_upper", nrow(ci_70)))),
+                        prop=rbind(as.matrix(vac_ci_70[,1]*100),
+                                   as.matrix(vac_ci_70[,2]*100),
+                                   as.matrix(vac_ci_70[,3]*100),
+                                   as.matrix(ci_70[,1]*100),
+                                   as.matrix(ci_70[,2]*100),
+                                   as.matrix(ci_70[,3]*100)))
+
+
+
+fig_20 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_20
+fig_30 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_30
+fig_40 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_40
+fig_50 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_50
+fig_60 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_60
+fig_70 %>% pivot_wider(names_from = "type",
+                          values_from = "prop") -> fig_70
+
+
+
+fig_20[which(fig_20$date==as.Date("2022/4/10")),]
+fig_30[which(fig_30$date==as.Date("2022/4/10")),]
+fig_40[which(fig_40$date==as.Date("2022/4/10")),]
+fig_50[which(fig_50$date==as.Date("2022/4/10")),]
+fig_60[which(fig_60$date==as.Date("2022/4/10")),]
+fig_70[which(fig_70$date==as.Date("2022/4/10")),]
+
+fig_20[which(fig_20$date==as.Date("2022/6/1")),]
+fig_30[which(fig_30$date==as.Date("2022/6/1")),]
+fig_40[which(fig_40$date==as.Date("2022/6/1")),]
+fig_50[which(fig_50$date==as.Date("2022/6/1")),]
+fig_60[which(fig_60$date==as.Date("2022/6/1")),]
+fig_70[which(fig_70$date==as.Date("2022/6/1")),]
+
+fig_20[which(fig_20$date==as.Date("2022/8/1")),]
+fig_30[which(fig_30$date==as.Date("2022/8/1")),]
+fig_40[which(fig_40$date==as.Date("2022/8/1")),]
+fig_50[which(fig_50$date==as.Date("2022/8/1")),]
+fig_60[which(fig_60$date==as.Date("2022/8/1")),]
+fig_70[which(fig_70$date==as.Date("2022/8/1")),]
+
+
+fractionfig <- function (fig_age, age){
+  
+  ggplot(data=fig_age)+
+    geom_line(aes(x=date,y=vac_est), size=0.9, colour="skyblue") +
+    geom_ribbon(aes(x=date,ymin=vac_lower, ymax=vac_upper), alpha=0.5, colour="skyblue", fill="skyblue") +
+    
+    geom_line(aes(x=date,y=inf_est), size=0.9, colour="palevioletred") +
+    geom_ribbon(aes(x=date,ymin=inf_lower, ymax=inf_upper), alpha=0.5, colour="palevioletred", fill="palevioletred")+
+    
+    ylab("") +
+    xlab("") +
+    
+    theme(text = element_text(size=18)) +
+    scale_x_date(breaks = "2 months") +
+    scale_y_continuous(expand = c(0,0),limits = c(0,100)) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          axis.text.x = element_text(size = 17, angle = 45, colour = "black",
+                                     vjust = 1, hjust = 1),
+          axis.text.y =  element_text(size = 17)) +
+    ggtitle(paste0(age))
+}
+
+(imm20 <- fractionfig(fig_20, "20-29 years"))
+(imm30 <- fractionfig(fig_30, "30-39 years"))
+(imm40 <- fractionfig(fig_40, "40-49 years"))
+(imm50 <- fractionfig(fig_50, "50-59 years"))
+(imm60 <- fractionfig(fig_60, "60-69 years"))
+(imm70 <- fractionfig(fig_70, "70 years and above"))
+
+
+
+imm2040 <- ggarrange(imm20, imm30, imm40,
+                     vjust = 1.5, hjust = -0.1, nrow= 1, ncol = 3,
+                     labels = c("A", "B", "C"),
+                     font.label = list(size=18))
+
+
+imm5070 <- ggarrange(imm50, imm60, imm70,
+                     vjust = 1.5, hjust = -0.1, nrow= 1, ncol = 3,
+                     labels = c("D", "E", "F"),
+                     font.label = list(size=18))
+
+(upperfig_imm <- annotate_figure(imm2040, left =text_grob("Proportion immune to \n symptomatic infection (%)", size =20, rot=90),
+                                 bottom=text_grob("Date", size = 20)))
+
+(lowerfig_imm <- annotate_figure(imm5070, left =text_grob("Proportion immune to \n symptomatic infection (%)", size =20, rot=90),
+                                 bottom=text_grob("Date", size = 20)))
+
+ggarrange(upperfig_imm, lowerfig_imm,
+          vjust =1.5, hjust = -0.1, nrow = 2, ncol = 1)
+
+
+# 8. creating figure 5 ---------------------------------------------------------
+
+age_groups <- c("20s", "30s", "40s", "50s", "60s", "70 and above")
+
+bar <- as.data.frame(matrix(0, nrow=3*length(age_groups), ncol=3))
+colnames(bar) <- c("age", "period", "susprop")
+bar$age <- rep(age_groups, 3)
+bar$period <- c(rep(latest, length(age_groups)), 
+                rep(as.Date("2022/6/1"), length(age_groups)),
+                rep(as.Date("2022/8/1"), length(age_groups)))
+
+
+
+bar$immprop[1] <- 100 - fig_20_uk$inf_est[which(fig_20_uk$date==latest)] 
+bar$immprop[7] <- 100 - fig_20_uk$inf_est[which(fig_20_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[13] <- 100 - fig_20_uk$inf_est[which(fig_20_uk$date==ext)] 
+
+bar$immprop[2] <- 100 - fig_30_uk$inf_est[which(fig_30_uk$date==latest)] 
+bar$immprop[8] <- 100 - fig_30_uk$inf_est[which(fig_30_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[14] <- 100 - fig_30_uk$inf_est[which(fig_30_uk$date==ext)] 
+
+bar$immprop[3] <- 100 - fig_40_uk$inf_est[which(fig_40_uk$date==latest)] 
+bar$immprop[9] <- 100 - fig_40_uk$inf_est[which(fig_40_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[15] <- 100 - fig_40_uk$inf_est[which(fig_40_uk$date==ext)] 
+
+bar$immprop[4] <- 100 - fig_50_uk$inf_est[which(fig_50_uk$date==latest)] 
+bar$immprop[10] <- 100 - fig_50_uk$inf_est[which(fig_50_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[16] <- 100 - fig_50_uk$inf_est[which(fig_50_uk$date==ext)] 
+
+bar$immprop[5] <- 100 - fig_60_uk$inf_est[which(fig_60_uk$date==latest)] 
+bar$immprop[11] <- 100 - fig_60_uk$inf_est[which(fig_60_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[17] <- 100 - fig_60_uk$inf_est[which(fig_60_uk$date==ext)] 
+
+bar$immprop[6] <- 100 - fig_70_uk$inf_est[which(fig_70_uk$date==latest)] 
+bar$immprop[12] <- 100 - fig_70_uk$inf_est[which(fig_70_uk$date==as.Date("2022/6/1"))] 
+bar$immprop[18] <- 100 -  fig_70_uk$inf_est[which(fig_70_uk$date==ext)] 
+
+
+ggplot(bar) + 
+  geom_col(aes(x=factor(period), y =immprop, fill=age), 
+           position = position_dodge(preserve = 'single', width=0.8),
+           size = 0.5,
+           width=0.65) + 
+  ylab("Proportion susceptible to symptomatic infection (%) \n") +
+  xlab("\n Date") +
+  theme(text = element_text(size=13)) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+ 
+  scale_fill_brewer(palette="RdYlBu", direction = -1) +
+  scale_y_continuous(limits = c(0,100), expand = c(0,0)) + 
+  guides(fill=guide_legend(title="Age group")) 
